@@ -9,12 +9,18 @@ O AgroGuard recebe coordenadas geográficas (ou nome do município), identifica 
 ### Score de Risco Ambiental (0-100)
 Mede o quanto um município está exposto a riscos de queimadas e condições adversas.
 
-- **Fogo (F)**: focos de calor nos últimos 7/30 dias, total anual e intensidade (FRP)
+- **Fogo (F)**: risco de fogo do INPE, focos nos últimos 7/30 dias, intensidade (FRP) e período seco equivalente (PSE) estimado. O total de registros do município na base é informativo e não entra na fórmula.
 - **Clima (C)**: dias sem chuva, precipitação e risco meteorológico de fogo
-- **Agrícola (A)**: hectares irrigados, pivôs centrais e seguro rural (SISSER)
+- **Agrícola (A)**: hectares irrigados, quantidade estimada de pivôs e percentual de pivôs expostos a focos, informado externamente (padrão: zero). O SISSER possui score próprio de exposição econômica (`SIS`); nos módulos enviados, não entra diretamente na fórmula de A ou R.
 - **Ambiental (S)**: proximidade de áreas protegidas *(dados pendentes)*
 
-Fórmula: `R = 0.40*F + 0.25*C + 0.20*A + 0.15*S` (com redistribuição de pesos quando um componente não tem dados)
+Fórmula com todos os componentes disponíveis: `R = 0.55*F + 0.20*C + 0.15*A + 0.10*S`. Quando há componentes ausentes (`None`), os pesos disponíveis são divididos pela sua soma; zero mantém o peso. Sem S, por exemplo: `R = (0.55*F + 0.20*C + 0.15*A) / 0.90`.
+
+Prioridade agrícola: `P = 0.70*R + 0.30*A`, usando R já arredondado para uma casa decimal; A ausente é tratado como zero nessa fórmula.
+
+Score de fogo: `F = 0.60*RF_score + 0.15*F7 + 0.10*F30 + 0.10*I + 0.05*PSE_score`. `RF_score` é a média de `risco_fogo` dos registros dos últimos 30 dias multiplicada por 100 e limitada a 0–100; os demais componentes são normalizados por p05/p95. O PSE é uma aproximação: `dias_sem_chuva * exp(-0.04 * precipitacao)`. A função auxiliar que calcula RF a partir de vegetação, temperatura e umidade não é chamada nesse fluxo.
+
+Score agrícola: `A = 0.50*H + 0.30*Q + 0.20*D`. H e Q são normalizados; Q é estimado por `max(1, round(hectares / 120))` para município encontrado na base. D é a proporção de pivôs expostos multiplicada por 100 e limitada a 0–100.
 
 ### Score de Aptidão Agrícola (0-100)
 Mede o potencial agrícola climático do município com base no ZARC.
@@ -22,7 +28,7 @@ Mede o potencial agrícola climático do município com base no ZARC.
 - Taxa de aptidão geral e de sequeiro
 - Diversidade de culturas viáveis
 
-Fórmula: `ZARC = 0.50*Aptidão_sequeiro + 0.30*Aptidão_geral + 0.20*Diversidade_culturas`
+Fórmula: `ZARC = 0.50*Aptidão_sequeiro + 0.30*Aptidão_geral + 0.20*Diversidade_culturas` (componentes normalizados por p05/p95). As taxas contam células das colunas `dec*` com valor 20; a diversidade conta culturas com ao menos uma célula de valor 20.
 
 ## Fontes de dados
 
@@ -41,9 +47,9 @@ agroguard/
 ├── api.py                          # FastAPI — endpoints e orquestração
 ├── scores/
 │   ├── normalizacao.py             # Min-max com p05/p95, faixas percentílicas
-│   ├── score_fogo.py               # F = 0.375*F7 + 0.250*F30 + 0.250*F_ano + 0.125*I
-│   ├── score_climatico.py          # C = 0.40*Chuva + 0.35*RiscoFogo + 0.25*DiasSemChuva
-│   ├── score_agricola.py           # A = 0.50*Hectares + 0.30*QtdPivos + 0.20*Densidade
+│   ├── score_fogo.py               # F = 0.60*RF + 0.15*F7 + 0.10*F30 + 0.10*I + 0.05*PSE
+│   ├── score_climatico.py          # C = 0.40*DeficitChuva + 0.35*RiscoFogo + 0.25*DiasSemChuva
+│   ├── score_agricola.py           # A = 0.50*Hectares + 0.30*QtdPivosEstimada + 0.20*PivosExpostos
 │   ├── score_sisser.py             # SIS = 0.40*Area + 0.35*Valor + 0.25*Apólices
 │   ├── score_zarc.py               # ZARC = aptidão agrícola climática
 │   └── score_geral.py              # R, P, relatório completo com sub-scores
@@ -67,8 +73,8 @@ agroguard/
 1. **Startup**: carrega todos os dados globais (focos BR, pivôs, SISSER, ZARC, malha municipal) e pré-calcula contornos dos 27 estados
 2. **Seleção de estado**: o endpoint `/estado/{uf}` calcula scores de fogo, clima, agrícola, SISSER e ZARC para todos os municípios daquele estado, cacheia na memória
 3. **Consulta**: o endpoint `/score?lat=X&lon=Y&uf=UF` localiza o município por ponto-em-polígono e retorna o relatório completo com todos os sub-scores e fatores explicativos
-4. **Normalização**: todos os indicadores passam por min-max com percentis 5/95 para evitar outliers, escala 0-100
-5. **Peso redistribuído**: quando um componente não tem dados (ex: município sem pivôs), seu peso é redistribuído entre os outros — `None ≠ 0`
+4. **Normalização**: os componentes relativos usam min-max com percentis 5/95 e corte em 0–100; quando p05 = p95, recebem 50. Exceções: o RF no score de fogo é multiplicado por 100, e o percentual de pivôs expostos já está na escala 0–100. A precipitação no score climático é normalizada com inversão (menos chuva → maior score).
+5. **Peso redistribuído**: no cálculo de R, componentes `None` são excluídos e os pesos restantes são reescalados — `None ≠ 0`. No relatório, A é considerado ausente quando hectares irrigados ≤ 0. Essa regra não é aplicada automaticamente aos componentes internos de cada sub-score.
 
 ## Reproduzir localmente
 
@@ -158,16 +164,18 @@ python3 -m pytest tests/ -v
 
 ### Exemplo de resposta `/score`
 
+Exemplo ilustrativo e parcial, com S ausente; os números não representam uma consulta validada à base. `focos_total_ano` é o nome do campo, mas o código conta todos os registros do município no DataFrame recebido, sem filtrar o ano.
+
 ```json
 {
   "municipio": "Rio Verde",
   "uf": "GO",
-  "score_geral": 54.1,
+  "score_geral": 56.1,
   "classe_risco": "Moderado",
-  "score_prioridade": 43.8,
+  "score_prioridade": 60.9,
   "indices": {
     "fogo": {"score_F": 48.5, "focos_7d": 12, "focos_30d": 223, "focos_total_ano": 2004},
-    "climatico": {"score_C": 65.2, "dias_sem_chuva": 15},
+    "climatico": {"score_C": 65.2, "dias_sem_chuva_medio": 15},
     "agricola": {"score_A": 72.1, "hectares_irrigados": 45230, "qtd_pivos_estimada": 377}
   },
   "aptidao": {
@@ -183,7 +191,7 @@ python3 -m pytest tests/ -v
 
 - **Score alto = mais risco** (no tema Risco Ambiental)
 - **Score alto = melhor aptidão** (no tema Aptidão Agrícola)
-- **None ≠ 0**: dado ausente redistribui peso; dado zero mantém peso na fórmula
+- **None ≠ 0**: no cálculo de R, dado ausente redistribui peso; dado zero mantém peso na fórmula. Isso não garante redistribuição dentro dos sub-scores.
 - **Normalização p05/p95**: evita que outliers extremos distorçam a escala
 - **Cache por estado**: primeiro acesso calcula tudo (~10-45s dependendo do estado), depois instantâneo
 
@@ -191,5 +199,5 @@ python3 -m pytest tests/ -v
 
 - ICMBio — Unidades de Conservação (score Ambiental S)
 - FUNAI — Terras Indígenas (score Ambiental S)
-- ANA — Shapefile dos pivôs centrais (score Proximidade P — distância foco↔pivô)
+- ANA — Shapefile dos pivôs centrais (cálculo de proximidade foco↔pivô e do percentual de pivôs expostos D; P já designa a prioridade agrícola)
 - INMET — Estações meteorológicas (melhorar score Climático C)
