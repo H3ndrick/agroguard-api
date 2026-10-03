@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgroGuard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root {
+  --bg: #f5f5f5; --card: #fff; --text: #1a1a1a; --muted: #666;
+  --verde-escuro: #1b5e20; --verde: #4caf50; --amarelo: #ffc107;
+  --laranja: #ff9800; --vermelho: #d32f2f; --borda: #ddd;
+}
+@media(prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#1a1a1a;--card:#262626;--text:#e5e5e5;--muted:#999;--borda:#444;
+  }
+}
+* { box-sizing: border-box; margin: 0; }
+body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); }
+#map { height: 55vh; min-height: 300px; }
+.panel { padding: 16px; max-width: 600px; margin: 0 auto; }
+h1 { font-size: 1.3rem; margin-bottom: 4px; }
+.sub { color: var(--muted); font-size: .85rem; margin-bottom: 12px; }
+.coords { font-size: .9rem; margin-bottom: 8px; color: var(--muted); }
+button {
+  width: 100%; padding: 12px; font-size: 1rem; font-weight: 600;
+  background: var(--verde-escuro); color: #fff; border: none; border-radius: 8px;
+  cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: default; }
+#result { margin-top: 16px; }
+.card {
+  background: var(--card); border: 1px solid var(--borda);
+  border-radius: 12px; padding: 16px; margin-bottom: 12px;
+}
+.score-big { font-size: 2.5rem; font-weight: 700; text-align: center; }
+.classe { text-align: center; font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
+.municipio { text-align: center; color: var(--muted); margin-bottom: 8px; }
+.bar-group { margin: 6px 0; }
+.bar-label { font-size: .8rem; display: flex; justify-content: space-between; }
+.bar-bg { height: 8px; background: var(--borda); border-radius: 4px; margin-top: 2px; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+.fatores { list-style: none; padding: 0; }
+.fatores li { font-size: .85rem; padding: 4px 0; border-bottom: 1px solid var(--borda); }
+.fatores li:last-child { border: none; }
+.hint { text-align: center; color: var(--muted); font-size: .9rem; margin-top: 12px; }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.tab {
+  flex: 1; padding: 8px; text-align: center; font-size: .85rem; font-weight: 600;
+  border: 2px solid var(--borda); border-radius: 8px; cursor: pointer;
+  background: var(--card); color: var(--muted); transition: all .2s;
+}
+.tab.active { border-color: var(--verde-escuro); color: var(--verde-escuro); background: var(--card); }
+.tab-risco.active { border-color: var(--vermelho); color: var(--vermelho); }
+.tab-aptidao.active { border-color: var(--verde-escuro); color: var(--verde-escuro); }
+.aptidao-score { font-size: 2.5rem; font-weight: 700; text-align: center; }
+.aptidao-classe { text-align: center; font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
+.row { display: flex; gap: 8px; margin-bottom: 10px; }
+.row select {
+  padding: 10px 12px; font-size: .95rem; border: 1px solid var(--borda);
+  border-radius: 8px; background: var(--card); color: var(--text); outline: none;
+  min-width: 80px;
+}
+.row select:focus { border-color: var(--verde-escuro); }
+.search-wrap { position: relative; flex: 1; }
+.search-wrap input {
+  width: 100%; padding: 10px 12px; font-size: .95rem; border: 1px solid var(--borda);
+  border-radius: 8px; background: var(--card); color: var(--text); outline: none;
+}
+.search-wrap input:focus { border-color: var(--verde-escuro); }
+.suggestions {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 1000;
+  background: var(--card); border: 1px solid var(--borda); border-top: none;
+  border-radius: 0 0 8px 8px; max-height: 200px; overflow-y: auto; display: none;
+}
+.suggestions div {
+  padding: 8px 12px; font-size: .9rem; cursor: pointer;
+}
+.suggestions div:hover { background: var(--borda); }
+.loading-uf {
+  text-align: center; padding: 16px; font-size: .95rem; color: var(--verde-escuro);
+  font-weight: 600; display: none;
+}
+.loading-uf .spinner {
+  display: inline-block; width: 18px; height: 18px; border: 3px solid var(--borda);
+  border-top-color: var(--verde-escuro); border-radius: 50%;
+  animation: spin .8s linear infinite; vertical-align: middle; margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.stats-bar {
+  font-size: .75rem; color: var(--muted); text-align: center; margin-bottom: 8px;
+}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+<div class="panel">
+  <h1>AgroGuard</h1>
+  <p class="sub">Índice de risco ambiental para áreas irrigadas</p>
+  <div class="row">
+    <select id="ufSelect">
+      <option value="">Estado...</option>
+    </select>
+    <div class="search-wrap">
+      <input type="text" id="search" placeholder="Buscar município..." autocomplete="off" disabled>
+      <div class="suggestions" id="suggestions"></div>
+    </div>
+  </div>
+  <div class="loading-uf" id="loadingUf"><span class="spinner"></span>Carregando dados do estado...</div>
+  <div class="stats-bar" id="statsBar"></div>
+  <p class="coords" id="coords">Selecione um estado e município</p>
+  <button id="btn" disabled onclick="consultar()">Consultar Score</button>
+  <div id="result"></div>
+  <p class="hint" id="hint">Selecione um estado para começar</p>
+</div>
+
+<script>
+const map = L.map('map').setView([-14.2, -51.9], 4);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+let marker = null;
+let lat = null, lon = null;
+let currentUf = '';
+let municipios = [];
+let contornoLayer = null;
+
+const UFS = [
+  'AC','AL','AM','AP','BA','CE','DF','ES','GO','MA','MG','MS','MT',
+  'PA','PB','PE','PI','PR','RJ','RN','RO','RR','RS','SC','SE','SP','TO'
+];
+
+const ufSelect = document.getElementById('ufSelect');
+const searchInput = document.getElementById('search');
+const sugBox = document.getElementById('suggestions');
+
+UFS.forEach(uf => {
+  const opt = document.createElement('option');
+  opt.value = uf; opt.textContent = uf;
+  ufSelect.appendChild(opt);
+});
+
+ufSelect.addEventListener('change', async () => {
+  const uf = ufSelect.value;
+  if (!uf) return;
+  currentUf = uf;
+  searchInput.value = '';
+  searchInput.disabled = true;
+  document.getElementById('result').innerHTML = '';
+  document.getElementById('loadingUf').style.display = '';
+  document.getElementById('statsBar').textContent = '';
+  document.getElementById('hint').textContent = '';
+  ufSelect.disabled = true;
+  document.getElementById('btn').disabled = true;
+
+  try {
+    const r = await fetch(`/estado/${uf}`);
+    const data = await r.json();
+
+    municipios = data.municipios;
+    searchInput.disabled = false;
+    searchInput.placeholder = `Buscar em ${uf} (${municipios.length} municípios)...`;
+
+    // Mover mapa pro centro do estado
+    map.setView([data.centro.lat, data.centro.lon], 7);
+
+    // Contorno
+    if (contornoLayer) map.removeLayer(contornoLayer);
+    contornoLayer = L.geoJSON(data.contorno, {
+      style: {color:'#1b5e20', weight:2, fillColor:'#1b5e20', fillOpacity:0.05, dashArray:'6 4'}
+    }).addTo(map);
+
+    // Stats
+    const s = data.stats;
+    document.getElementById('statsBar').textContent =
+      `${s.municipios} municípios · ${s.focos.toLocaleString('pt-BR')} focos · ${s.com_agri} c/ pivôs · ${s.com_sisser} c/ seguro · ${s.com_zarc} c/ ZARC`;
+
+    document.getElementById('coords').textContent = 'Clique no mapa ou busque um município';
+  } catch(e) {
+    document.getElementById('statsBar').textContent = 'Erro ao carregar estado';
+  } finally {
+    document.getElementById('loadingUf').style.display = 'none';
+    ufSelect.disabled = false;
+  }
+});
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  if (q.length < 2) { sugBox.style.display='none'; return; }
+  const matches = municipios.filter(m =>
+    m.nome.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').includes(q)
+  ).slice(0, 8);
+  if (!matches.length) { sugBox.style.display='none'; return; }
+  sugBox.innerHTML = matches.map(m =>
+    `<div data-lat="${m.lat}" data-lon="${m.lon}">${m.nome}</div>`
+  ).join('');
+  sugBox.style.display = 'block';
+});
+
+sugBox.addEventListener('click', e => {
+  const el = e.target.closest('div[data-lat]');
+  if (!el) return;
+  lat = parseFloat(el.dataset.lat);
+  lon = parseFloat(el.dataset.lon);
+  searchInput.value = el.textContent;
+  sugBox.style.display = 'none';
+  map.setView([lat, lon], 11);
+  setMarker(lat, lon);
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) sugBox.style.display = 'none';
+});
+
+map.on('click', e => {
+  if (!currentUf) return;
+  lat = e.latlng.lat;
+  lon = e.latlng.lng;
+  setMarker(lat, lon);
+});
+
+function setMarker(lt, ln) {
+  if (marker) marker.setLatLng([lt, ln]);
+  else marker = L.marker([lt, ln], {draggable: true}).addTo(map);
+  marker.on('dragend', () => {
+    lat = marker.getLatLng().lat; lon = marker.getLatLng().lng;
+    document.getElementById('coords').textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  });
+  document.getElementById('coords').textContent = `${lt.toFixed(4)}, ${ln.toFixed(4)}`;
+  document.getElementById('btn').disabled = false;
+  document.getElementById('hint').textContent = '';
+}
+
+function corScore(score) {
+  if (score <= 20) return 'var(--verde-escuro)';
+  if (score <= 40) return 'var(--verde)';
+  if (score <= 60) return 'var(--amarelo)';
+  if (score <= 80) return 'var(--laranja)';
+  return 'var(--vermelho)';
+}
+
+function barHtml(label, value) {
+  const v = Math.round(value);
+  return `<div class="bar-group">
+    <div class="bar-label"><span>${label}</span><span>${v}</span></div>
+    <div class="bar-bg"><div class="bar-fill" style="width:${v}%;background:${corScore(v)}"></div></div>
+  </div>`;
+}
+
+function showTab(tab) {
+  document.getElementById('tab-risco').style.display = tab==='risco' ? '' : 'none';
+  document.getElementById('tab-aptidao').style.display = tab==='aptidao' ? '' : 'none';
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.tab-'+tab).classList.add('active');
+}
+
+async function consultar() {
+  const btn = document.getElementById('btn');
+  const res = document.getElementById('result');
+  btn.disabled = true;
+  btn.textContent = 'Consultando...';
+  res.innerHTML = '';
+
+  try {
+    const r = await fetch(`/score?lat=${lat}&lon=${lon}&uf=${currentUf}`);
+    if (!r.ok) {
+      let msg = 'Erro na consulta';
+      try { msg = (await r.json()).detail || msg; } catch {}
+      res.innerHTML = `<div class="card" style="text-align:center;color:var(--vermelho)">${msg}</div>`;
+      return;
+    }
+    const d = await r.json();
+    const idx = d.indices;
+    const apt = d.aptidao;
+    const temAptidao = apt && apt.score_aptidao != null;
+
+    const riscoHtml = `
+      <div class="card">
+        <p class="municipio">${d.municipio} – ${d.uf}</p>
+        <div class="score-big" style="color:${corScore(d.score_geral)}">${d.score_geral}</div>
+        <p class="classe" style="color:${corScore(d.score_geral)}">${d.classe_risco}</p>
+      </div>
+      <div class="card">
+        ${barHtml('Fogo (F)', idx.fogo.score_F)}
+        ${barHtml('Clima (C)', idx.climatico.score_C)}
+        ${barHtml('Agrícola (A)', idx.agricola.score_A)}
+        ${idx.ambiental.score_S != null ? barHtml('Ambiental (S)', idx.ambiental.score_S) : ''}
+      </div>
+      <div class="card">
+        <div class="bar-label" style="margin-bottom:8px"><span><b>Prioridade agrícola</b></span><span>${d.score_prioridade} – ${d.classe_prioridade}</span></div>
+        <div style="font-size:.85rem;color:var(--muted)">
+          ${idx.agricola.hectares_irrigados > 0 ? Math.round(idx.agricola.hectares_irrigados).toLocaleString('pt-BR') + ' ha irrigados · ~' + idx.agricola.qtd_pivos_estimada + ' pivôs' : 'Sem pivôs neste município'}
+        </div>
+      </div>
+      ${d.fatores_risco.length ? `<div class="card"><b style="font-size:.85rem">Fatores de risco</b><ul class="fatores">${d.fatores_risco.map(f=>'<li>• '+f+'</li>').join('')}</ul></div>` : ''}
+    `;
+
+    const corApt = (s) => { if(s>=80) return 'var(--verde-escuro)'; if(s>=60) return 'var(--verde)'; if(s>=40) return 'var(--amarelo)'; if(s>=20) return 'var(--laranja)'; return 'var(--vermelho)'; };
+    const aptHtml = temAptidao ? `
+      <div class="card">
+        <p class="municipio">${d.municipio} – ${d.uf}</p>
+        <div class="aptidao-score" style="color:${corApt(apt.score_aptidao)}">${apt.score_aptidao}</div>
+        <p class="aptidao-classe" style="color:${corApt(apt.score_aptidao)}">${apt.classe_aptidao[0]}</p>
+      </div>
+      <div class="card">
+        ${barHtml('ZARC (aptidão)', apt.score_aptidao)}
+        ${apt.zarc ? `<div style="font-size:.85rem;color:var(--muted);margin-top:8px">
+          Aptidão geral: ${apt.zarc.taxa_aptidao}% · Sequeiro: ${apt.zarc.taxa_aptidao_sequeiro}%<br>
+          ${apt.zarc.n_culturas_aptas} culturas viáveis
+        </div>` : ''}
+      </div>
+      ${apt.fatores_aptidao.length ? `<div class="card"><b style="font-size:.85rem">Fatores de aptidão</b><ul class="fatores">${apt.fatores_aptidao.map(f=>'<li>• '+f+'</li>').join('')}</ul></div>` : ''}
+    ` : '<div class="card" style="text-align:center;color:var(--muted)">Sem dados ZARC para este município</div>';
+
+    res.innerHTML = `
+      <div class="tabs">
+        <div class="tab tab-risco active" onclick="showTab('risco')">Risco Ambiental</div>
+        <div class="tab tab-aptidao" onclick="showTab('aptidao')">Aptidão Agrícola</div>
+      </div>
+      <div id="tab-risco">${riscoHtml}</div>
+      <div id="tab-aptidao" style="display:none">${aptHtml}</div>
+    `;
+  } catch(e) {
+    res.innerHTML = `<div class="card" style="color:var(--vermelho)">Erro de conexão</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Consultar Score';
+  }
+}
+</script>
+</body>
+</html>
